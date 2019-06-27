@@ -3,23 +3,24 @@ import os
 import random
 import sys; sys.path.append('../')
 import torch
-import torch.nn as nn
+# import torch.nn as nn
 import numpy as np
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
-import torch.nn.functional as F
+# import torch.nn.functional as F
 import argparse
-from .run_SiamRPN import TrainDataLoader
-from shapely.geometry import Polygon
+from run_SiamRPN import TrainDataLoader
+# from shapely.geometry import Polygon
 from tensorboardX import SummaryWriter
 from os.path import realpath, dirname, join
-from .net import SiamRPNvot
+from net import SiamRPN
+from cfg import rpn
 
 parser = argparse.ArgumentParser(description='PyTorch SiameseRPN Training')
 
-parser.add_argument('--train_path', default='D:\\uav_frame\\00', metavar='DIR',help='path to dataset')
+parser.add_argument('--train_path', default='/media/wp/software/uav_frame/00', metavar='DIR',help='path to dataset')
 
-parser.add_argument('--weight_dir', default='D:\\project\\py\\yolo3\\Siamese-RPN-pytorch-master', metavar='DIR',help='path to weight')
+parser.add_argument('--weight_dir', default='/media/wp/windows/pyProject/siamese/DaSiamRPN-master_guided_anchor_train/weight', metavar='DIR',help='path to weight')
 
 parser.add_argument('--checkpoint_path', default=None, help='resume')
 
@@ -46,9 +47,11 @@ def main():
             args.max_batches += len(os.listdir(dir_path))
 
     """ Model on gpu """
-    model = SiamRPNvot()
+    model = SiamRPN()
     model = model.cuda()
-    model.load_state_dict(torch.load(join(realpath(dirname(__file__)), 'SiamRPNVOT.model')))
+    # model.load_state_dict(torch.load(join(realpath(dirname(__file__)), 'SiamRPNVOT.model')))
+
+
     model.train().cuda()
     cudnn.benchmark = True
 
@@ -72,22 +75,27 @@ def main():
             ret = data_loader.__get__(random.choice(index_list))
             template = ret['temple'].cuda()
             detection= ret['detection'].cuda()
+            gtbox=list([ret['gtbox'][0].cuda()])
+            shapeAdaption=list([ret['shapeAdaption'].cuda()])
+            shapeAdaption1 = list([ret['shapeAdaption1'].cuda()])
             model.temple(template)
-            rout,cout,lout = model(detection)
-            loss= SiamRPNvot.loss(rout, cout,lout)
+            cout,rout,lout= model(detection,shapeAdaption)
+            cfg=rpn
 
-            closses.update(loss.closs.cpu().item())
-            rlosses.update(loss.rloss.cpu().item())
-            llosses.update(loss.lloss.cpu().item())
+            loss= model.loss(cout,rout,lout,shapeAdaption1,gtbox,None,ret['img_metas'],cfg,None)
+
+            closses.update(loss['loss_cls'][0].cpu().item())
+            rlosses.update(loss['loss_reg'][0].cpu().item())
+            llosses.update(loss['loss_loc'][0].cpu().item())
 
             optimizer.zero_grad()
-            loss.backward()
+            loss['Loss'].backward()
             optimizer.step()
             steps += 1
             losss[0]=closses.avg
             losss[1] = rlosses.avg
             losss[2] = llosses.avg
-        print("Epoch:{:04d}\tcloss:{:.4f}\trloss:{:.4f}\ttloss:{:.4f}".format(epoch,  closses.avg, rlosses.avg, llosses.avg ))
+            print("Epoch:{:04d}\tcloss:{:.4f}\trloss:{:.4f}\ttloss:{:.4f}".format(epoch,  closses.avg, rlosses.avg, llosses.avg ))
         writer.add_scalar("closses", losss[0], epoch)
         writer.add_scalar("rlosses", losss[1], epoch)
         writer.add_scalar("llosses", losss[2], epoch)
@@ -100,34 +108,34 @@ def main():
             }
             torch.save(state, file_path)
 
-def intersection(g, p):
-    g = Polygon(g[:8].reshape((4, 2)))
-    p = Polygon(p[:8].reshape((4, 2)))
-    if not g.is_valid or not p.is_valid:
-        return 0
-    inter = Polygon(g).intersection(Polygon(p)).area
-    union = g.area + p.area - inter
-    if union == 0:
-        return 0
-    else:
-        return inter/union
-
-def standard_nms(S, thres):
-    """ use pre_thres to filter """
-    index = np.where(S[:, 8] > thres)[0]
-    S = S[index] # ~ 100, 4
-
-    # Then use standard nms
-    order = np.argsort(S[:, 8])[::-1]
-    keep = []
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        ovr = np.array([intersection(S[i], S[t]) for t in order[1:]])
-
-        inds = np.where(ovr <= thres)[0]
-        order = order[inds+1]
-    return S[keep]
+# def intersection(g, p):
+#     g = Polygon(g[:8].reshape((4, 2)))
+#     p = Polygon(p[:8].reshape((4, 2)))
+#     if not g.is_valid or not p.is_valid:
+#         return 0
+#     inter = Polygon(g).intersection(Polygon(p)).area
+#     union = g.area + p.area - inter
+#     if union == 0:
+#         return 0
+#     else:
+#         return inter/union
+#
+# def standard_nms(S, thres):
+#     """ use pre_thres to filter """
+#     index = np.where(S[:, 8] > thres)[0]
+#     S = S[index] # ~ 100, 4
+#
+#     # Then use standard nms
+#     order = np.argsort(S[:, 8])[::-1]
+#     keep = []
+#     while order.size > 0:
+#         i = order[0]
+#         keep.append(i)
+#         ovr = np.array([intersection(S[i], S[t]) for t in order[1:]])
+#
+#         inds = np.where(ovr <= thres)[0]
+#         order = order[inds+1]
+#     return S[keep]
 
 def reshape(x):
     t = np.array(x, dtype = np.float32)

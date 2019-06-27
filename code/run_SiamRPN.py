@@ -1,8 +1,4 @@
-# --------------------------------------------------------
-# DaSiamRPN
-# Licensed under The MIT License
-# Written by Qiang Wang (wangqiang2015 at ia.ac.cn)
-# --------------------------------------------------------
+
 import numpy as np
 from torch.autograd import Variable
 import torch
@@ -10,11 +6,11 @@ import torch.nn.functional as F
 import random
 import os
 import os.path as osp
-from utils import get_subwindow_tracking
+from util import get_subwindow_tracking
 import xml.etree.ElementTree as ET
 import cv2
 import sys
-from .net import SiamRPNvot
+from net import SiamRPN
 def generate_anchor(total_stride, scales, ratios, score_size):
     anchor_num = len(ratios) * len(scales)
     anchor = np.zeros((anchor_num, 4),  dtype=np.float32)
@@ -363,6 +359,7 @@ class TrainDataLoader(object):
         template_name, detection_name = sub_class_img_name[template_index], sub_class_img_name[detection_index]
         template_img_path, detection_img_path = osp.join(sub_class_dir_path, template_name), osp.join(
             sub_class_dir_path, detection_name)
+        print("template_img_path:%s,detection_img_path:%s\n"%(template_img_path,detection_img_path))
         im_template = cv2.imread(template_img_path)
         im_detection = cv2.imread(detection_img_path)
         template_xml_path=template_img_path.split('.')[0]+'.xml'
@@ -370,13 +367,35 @@ class TrainDataLoader(object):
         box_template=self.get_xywh_from_xml(template_xml_path)
         box_detection = self.get_xywh_from_xml(detection_xml_path)
 
+        rand = random.uniform(70, 130)
+
+        size = 22
+        shapeAdaptionW = np.ones([size,size],np.float32)*box_detection[2]*0.01*rand
+        shapeAdaptionH = np.ones([size,size], np.float32)*box_detection[3]*0.01*rand
+        shapeAdaption=np.stack((shapeAdaptionW, shapeAdaptionH), axis=0)
+        shapeAdaption = torch.from_numpy(shapeAdaption).cuda()
+        shapeAdaption=shapeAdaption.unsqueeze(0)
+
+        size1 = 19
+        shapeAdaptionW1 = np.ones([size1,size1],np.float32)*box_detection[2]*0.01*rand
+        shapeAdaptionH1 = np.ones([size1,size1], np.float32)*box_detection[3]*0.01*rand
+        shapeAdaption1=np.stack((shapeAdaptionW1, shapeAdaptionH1), axis=0)
+        shapeAdaption1 = torch.from_numpy(shapeAdaption1).cuda()
+        shapeAdaption1=shapeAdaption1.unsqueeze(0)
+
+        gtbox=list([torch.tensor([[box_detection[0]-box_detection[2]/2,box_detection[1]-box_detection[3]/2,box_detection[0]+box_detection[2]/2,box_detection[1]+box_detection[3]/2]])])
+
         # load infomation of template and detection
+
+        self.ret['gtbox']=gtbox
         self.ret['img_template'] = im_template
         self.ret['img_detection'] = im_detection
         self.ret['template_target_pos'] = np.array([box_template[0],box_template[1]])
         self.ret['template_target_sz'] = np.array([box_template[2],box_template[3]])
         self.ret['detection_target_pos'] = np.array([box_detection[0],box_detection[1]])
         self.ret['detection_target_sz'] = np.array([box_detection[2], box_detection[3]])
+        self.ret['shapeAdaption']=shapeAdaption
+        self.ret['shapeAdaption1'] = shapeAdaption1
         self.ret['anchors'] = self.anchors
         # self._average()  # 计算图像均值
 
@@ -431,6 +450,14 @@ class TrainDataLoader(object):
         # extract scaled crops for search region x at previous target position
         x_crop = Variable(get_subwindow_tracking(self.ret['img_detection'], self.ret['detection_target_pos'], self.ret['p'].instance_size, round(s_x), avg_chans).unsqueeze(0))
         self.ret['detection'] = x_crop
+        img_metas={}
+        img_metas['flip']=False
+        img_metas['img_shape']=list([271,271,3])
+        img_metas['ori_shape'] = list([271, 271, 3])
+        img_metas['pad_shape'] = list([271, 271, 3])
+        img_metas['scale_factor'] = scale_z
+        img_metas=list([img_metas])
+        self.ret['img_metas'] = img_metas
 
     def _generate_pos_neg_diff(self):
 
@@ -535,8 +562,8 @@ class TrainDataLoader(object):
 
 if __name__ == '__main__':
     # we will do a test for dataloader
-    net = SiamRPNvot()
-    loader = TrainDataLoader('D:\\uav_frame\\00',net ,check = True)
+    net = SiamRPN()
+    loader = TrainDataLoader('/media/wp/software/uav_frame/00',net ,check = True)
     #print(loader.__len__())
     index_list = range(loader.__len__())
     for i in range(1000):
